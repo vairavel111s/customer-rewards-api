@@ -127,6 +127,11 @@ com.retailer.rewards
 
 Requires JDK 21+ and Maven 3.9+.
 
+> **On the Java version:** the source is written in Java 8 idioms throughout, but it builds
+> and runs on Java 21 because Spring Boot 3.x requires Java 17 or above. See
+> [Design decisions](#design-decisions) for the reasoning and what a Java 8 target would
+> involve.
+
 ```bash
 mvn spring-boot:run
 ```
@@ -391,9 +396,15 @@ The database round trips stay constant instead of growing with the customer coun
 implementation detail that has changed between Spring versions; pinning our own wrapper
 keeps the API contract stable.
 
-**Java 21 bytecode, Java 8 style.** The role targets Java 8, and the code stays within Java
-8 idioms — streams, `Optional`, `java.time`, explicit types, no records or `var`. It is
-compiled at release 21 because Spring Boot 3.x requires Java 17+; the last Java 8 compatible
-line, Spring Boot 2.7, reached end of open-source support in 2023. Nothing in the source
-depends on a post-Java-8 language feature, so the same code compiles at release 8 under
-Spring Boot 2.7 if a Java 8 runtime is a hard requirement.
+**Java 21 bytecode, Java 8 style.** The role targets Java 8, and the code deliberately stays
+within Java 8 idioms: streams, `Optional`, `java.time`, explicit types, `Collectors.toList()`
+rather than `Stream.toList()`, and no records, `var`, text blocks or pattern matching.
+
+It is compiled at release 21 because Spring Boot 3.x requires Java 17 or above. The last
+Java 8 compatible line, Spring Boot 2.7, reached end of open-source support in November 2023,
+so building against it would mean shipping on an unmaintained framework.
+
+Targeting a Java 8 runtime would be a dependency exercise rather than a rewrite: downgrade
+to Spring Boot 2.7 and rename the `jakarta.*` imports back to `javax.*`, which is the
+namespace change Jakarta EE 9 introduced and the single largest difference between the two
+lines. The business logic, the reward rule and the tests would be untouched.
