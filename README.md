@@ -313,6 +313,23 @@ mvn test
 
 A JaCoCo coverage report is written to `target/site/jacoco/index.html`.
 
+### Postman collection
+
+`postman/customer-rewards-api.postman_collection.json` covers all six endpoints plus the
+error paths — 18 requests, each with assertions, so a Collection Runner pass is a
+pass/fail report rather than a manual click-through.
+
+Import it into Postman, start the service, and run the collection. The only variable is
+`baseUrl` (default `http://localhost:8080`). Dates are computed at run time by the
+collection pre-request script, because the seed data is anchored to the current month —
+so the collection keeps working without edits.
+
+```bash
+# optional: run it headless
+npm install -g newman
+newman run postman/customer-rewards-api.postman_collection.json
+```
+
 ### What is covered
 
 | Suite | Scope | Scenarios |

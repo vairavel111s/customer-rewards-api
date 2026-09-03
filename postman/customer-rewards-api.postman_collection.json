@@ -1,0 +1,803 @@
+{
+  "info": {
+    "_postman_id": "b3f1c7d2-5a48-4e19-9c60-2a7f4d8e1b03",
+    "name": "Customer Rewards API",
+    "description": "Runnable test collection for the Customer Rewards API.\n\nStart the service with `mvn spring-boot:run`, then run this collection with the Postman Collection Runner. Every request carries assertions, so a full run is a pass/fail report rather than a manual click-through.\n\nThe seeded data is anchored to the current month, so the date windows are computed at run time by the collection pre-request script. That means the collection keeps working whenever it is run, without editing dates.\n\nExpected point totals for the default three month window:\n\n| Customer | Id | Points |\n|---|---|---|\n| Alice Johnson | 1 | 884 |\n| Brian Chen | 2 | 258 |\n| Carla Mendes | 3 | 1849 |\n| Daniel O'Neill | 4 | 2200 |\n| Emily Watson | 5 | 0 |\n| Frank Miller | 6 | 115 |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// The demo data is anchored to the current month, so every date used below is",
+          "// derived at run time. Nothing in this collection needs editing over time.",
+          "const pad = (n) => String(n).padStart(2, '0');",
+          "const fmt = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());",
+          "",
+          "const now = new Date();",
+          "",
+          "// Today, the inclusive end of the default window.",
+          "pm.collectionVariables.set('today', fmt(now));",
+          "",
+          "// First day of the month two months back: the start of the three month window.",
+          "pm.collectionVariables.set('windowStart', fmt(new Date(now.getFullYear(), now.getMonth() - 2, 1)));",
+          "",
+          "// Four months back, wide enough to pull in Brian's older purchase.",
+          "pm.collectionVariables.set('widerStart', fmt(new Date(now.getFullYear(), now.getMonth() - 4, 1)));",
+          "",
+          "// Five years back: wider than the 24 month maximum the API allows.",
+          "pm.collectionVariables.set('tooWideStart', fmt(new Date(now.getFullYear() - 5, now.getMonth(), 1)));",
+          "",
+          "// Thirty days ahead, for the future-date validation check.",
+          "pm.collectionVariables.set('futureDate', fmt(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30)));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 · Customers",
+      "item": [
+        {
+          "name": "List all customers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Six seeded customers are returned', () => {",
+                  "    pm.expect(body).to.be.an('array').with.lengthOf(6);",
+                  "});",
+                  "",
+                  "pm.test('Each customer carries identity and a lifetime transaction count', () => {",
+                  "    body.forEach((c) => {",
+                  "        pm.expect(c).to.have.property('customerId');",
+                  "        pm.expect(c).to.have.property('name');",
+                  "        pm.expect(c).to.have.property('email');",
+                  "        pm.expect(c).to.have.property('memberSince');",
+                  "        pm.expect(c).to.have.property('totalTransactions');",
+                  "    });",
+                  "});",
+                  "",
+                  "pm.test('Emily Watson has no transactions at all', () => {",
+                  "    const emily = body.find((c) => c.customerId === 5);",
+                  "    pm.expect(emily.name).to.eql('Emily Watson');",
+                  "    pm.expect(emily.totalTransactions).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/customers",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "customers"]
+            },
+            "description": "Lists every customer. Use this first to discover the ids available in the demo data set."
+          },
+          "response": []
+        },
+        {
+          "name": "Transaction history (paged)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Page metadata reflects the requested page size', () => {",
+                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.size).to.eql(3);",
+                  "    pm.expect(body.content).to.have.lengthOf(3);",
+                  "});",
+                  "",
+                  "pm.test('Alice has seven transactions across three pages', () => {",
+                  "    pm.expect(body.totalElements).to.eql(7);",
+                  "    pm.expect(body.totalPages).to.eql(3);",
+                  "    pm.expect(body.last).to.eql(false);",
+                  "});",
+                  "",
+                  "pm.test('Results are ordered newest first', () => {",
+                  "    const dates = body.content.map((t) => t.transactionDate);",
+                  "    const sorted = dates.slice().sort().reverse();",
+                  "    pm.expect(dates).to.eql(sorted);",
+                  "});",
+                  "",
+                  "pm.test('Each row carries the points it earned', () => {",
+                  "    body.content.forEach((t) => pm.expect(t).to.have.property('pointsEarned'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/customers/1/transactions?page=0&size=3",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "customers", "1", "transactions"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "3" }
+              ]
+            },
+            "description": "Paged transaction history, newest first. Defaults to page=0, size=20; size is capped at 100."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 · Rewards",
+      "item": [
+        {
+          "name": "Rewards — default three month window",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Identifies the customer', () => {",
+                  "    pm.expect(body.customerId).to.eql(1);",
+                  "    pm.expect(body.customerName).to.eql('Alice Johnson');",
+                  "    pm.expect(body.email).to.eql('alice.johnson@example.com');",
+                  "});",
+                  "",
+                  "pm.test('Echoes back the period that was actually evaluated', () => {",
+                  "    pm.expect(body.periodStart).to.eql(pm.collectionVariables.get('windowStart'));",
+                  "    pm.expect(body.periodEnd).to.eql(pm.collectionVariables.get('today'));",
+                  "});",
+                  "",
+                  "pm.test('Total is 884 points', () => pm.expect(body.totalPoints).to.eql(884));",
+                  "",
+                  "pm.test('Breakdown covers exactly three calendar months', () => {",
+                  "    pm.expect(body.monthlyBreakdown).to.have.lengthOf(3);",
+                  "    pm.expect(body.monthlyBreakdown.map((m) => m.pointsEarned)).to.eql([115, 299, 470]);",
+                  "});",
+                  "",
+                  "pm.test('The $120.00 purchase earned 90 points (the worked example)', () => {",
+                  "    const t = body.transactions.find((x) => x.amount === 120);",
+                  "    pm.expect(t, 'a $120.00 transaction should exist').to.not.be.undefined;",
+                  "    pm.expect(t.pointsEarned).to.eql(90);",
+                  "});",
+                  "",
+                  "pm.test('Total reconciles against the sum of the transactions', () => {",
+                  "    const sum = body.transactions.reduce((acc, t) => acc + t.pointsEarned, 0);",
+                  "    pm.expect(sum).to.eql(body.totalPoints);",
+                  "});",
+                  "",
+                  "pm.test('Summary statistics are present', () => {",
+                  "    pm.expect(body.summary.totalTransactions).to.eql(7);",
+                  "    pm.expect(body.summary.monthsCovered).to.eql(3);",
+                  "    pm.expect(body.summary).to.have.property('averageTransactionAmount');",
+                  "    pm.expect(body.summary).to.have.property('highestTransactionAmount');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1"]
+            },
+            "description": "No date parameters, so the API applies its default: the current month plus the two before it. This is the three month scenario from the requirements."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — explicit date range",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Honours the requested period exactly', () => {",
+                  "    pm.expect(body.periodStart).to.eql(pm.collectionVariables.get('windowStart'));",
+                  "    pm.expect(body.periodEnd).to.eql(pm.collectionVariables.get('today'));",
+                  "});",
+                  "",
+                  "pm.test('Produces the same total as the default window', () => {",
+                  "    pm.expect(body.totalPoints).to.eql(884);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1?startDate={{windowStart}}&endDate={{today}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1"],
+              "query": [
+                { "key": "startDate", "value": "{{windowStart}}" },
+                { "key": "endDate", "value": "{{today}}" }
+              ]
+            },
+            "description": "The same window, requested explicitly. Proves the date parameters are honoured rather than ignored."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — threshold edge cases (Carla)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "const at = (amount) => body.transactions.find((t) => t.amount === amount);",
+                  "",
+                  "pm.test('Total is 1849 points', () => pm.expect(body.totalPoints).to.eql(1849));",
+                  "",
+                  "pm.test('$49.99 earns nothing — below the lower threshold', () => {",
+                  "    pm.expect(at(49.99).pointsEarned).to.eql(0);",
+                  "});",
+                  "",
+                  "pm.test('$50.00 earns nothing — at the threshold', () => {",
+                  "    pm.expect(at(50).pointsEarned).to.eql(0);",
+                  "});",
+                  "",
+                  "pm.test('$50.99 earns nothing — partial dollars are truncated, not rounded', () => {",
+                  "    pm.expect(at(50.99).pointsEarned).to.eql(0);",
+                  "});",
+                  "",
+                  "pm.test('$51.00 earns exactly 1 point', () => {",
+                  "    pm.expect(at(51).pointsEarned).to.eql(1);",
+                  "});",
+                  "",
+                  "pm.test('$999.99 earns 1848 points (2 x 899 + 50)', () => {",
+                  "    pm.expect(at(999.99).pointsEarned).to.eql(1848);",
+                  "});",
+                  "",
+                  "pm.test('A month with no activity is still reported, with zeroes', () => {",
+                  "    const quiet = body.monthlyBreakdown[1];",
+                  "    pm.expect(quiet.transactionCount).to.eql(0);",
+                  "    pm.expect(quiet.pointsEarned).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/3?startDate={{windowStart}}&endDate={{today}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "3"],
+              "query": [
+                { "key": "startDate", "value": "{{windowStart}}" },
+                { "key": "endDate", "value": "{{today}}" }
+              ]
+            },
+            "description": "Carla's purchases sit either side of both thresholds. This request is the proof that the reward rule is implemented exactly as specified."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — window excludes older purchase (Brian)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Only the four in-window transactions are counted', () => {",
+                  "    pm.expect(body.summary.totalTransactions).to.eql(4);",
+                  "    pm.expect(body.totalPoints).to.eql(258);",
+                  "});",
+                  "",
+                  "pm.test('The $500.00 purchase from four months ago is excluded', () => {",
+                  "    const old = body.transactions.find((t) => t.amount === 500);",
+                  "    pm.expect(old, 'the older purchase must not appear').to.be.undefined;",
+                  "});",
+                  "",
+                  "// Stash the total so the next request can prove the widened window adds to it.",
+                  "pm.collectionVariables.set('brianNarrowTotal', body.totalPoints);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/2?startDate={{windowStart}}&endDate={{today}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "2"],
+              "query": [
+                { "key": "startDate", "value": "{{windowStart}}" },
+                { "key": "endDate", "value": "{{today}}" }
+              ]
+            },
+            "description": "Brian has a $500.00 purchase four months back. Inside the three month window it must not be counted."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — widened window includes it (Brian)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('The older $500.00 purchase now appears', () => {",
+                  "    const old = body.transactions.find((t) => t.amount === 500);",
+                  "    pm.expect(old, 'the older purchase should now be included').to.not.be.undefined;",
+                  "    pm.expect(old.pointsEarned).to.eql(850);",
+                  "});",
+                  "",
+                  "pm.test('Total rises to 1108 — exactly 850 more than the narrow window', () => {",
+                  "    pm.expect(body.totalPoints).to.eql(1108);",
+                  "    const narrow = Number(pm.collectionVariables.get('brianNarrowTotal'));",
+                  "    pm.expect(body.totalPoints - narrow).to.eql(850);",
+                  "});",
+                  "",
+                  "pm.test('Period now spans five calendar months', () => {",
+                  "    pm.expect(body.summary.monthsCovered).to.eql(5);",
+                  "    pm.expect(body.summary.totalTransactions).to.eql(5);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/2?startDate={{widerStart}}&endDate={{today}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "2"],
+              "query": [
+                { "key": "startDate", "value": "{{widerStart}}" },
+                { "key": "endDate", "value": "{{today}}" }
+              ]
+            },
+            "description": "The same customer over a five month window. Run straight after the previous request — together they prove the date filter genuinely filters."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — customer with no activity (Emily)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, not 404 — the customer exists, she just has no purchases', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Zero totals rather than a missing or null payload', () => {",
+                  "    pm.expect(body.customerName).to.eql('Emily Watson');",
+                  "    pm.expect(body.totalPoints).to.eql(0);",
+                  "    pm.expect(body.transactions).to.be.an('array').that.is.empty;",
+                  "});",
+                  "",
+                  "pm.test('All three months are still reported', () => {",
+                  "    pm.expect(body.monthlyBreakdown).to.have.lengthOf(3);",
+                  "    body.monthlyBreakdown.forEach((m) => pm.expect(m.pointsEarned).to.eql(0));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/5",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "5"]
+            },
+            "description": "An enrolled customer with no purchases. The API returns zeroes rather than an error or an empty body."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — every customer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('All six customers are reported', () => {",
+                  "    pm.expect(body).to.be.an('array').with.lengthOf(6);",
+                  "});",
+                  "",
+                  "pm.test('Totals match the per-customer endpoints', () => {",
+                  "    const totals = {};",
+                  "    body.forEach((c) => { totals[c.customerId] = c.totalPoints; });",
+                  "    pm.expect(totals[1]).to.eql(884);",
+                  "    pm.expect(totals[2]).to.eql(258);",
+                  "    pm.expect(totals[3]).to.eql(1849);",
+                  "    pm.expect(totals[4]).to.eql(2200);",
+                  "    pm.expect(totals[5]).to.eql(0);",
+                  "    pm.expect(totals[6]).to.eql(115);",
+                  "});",
+                  "",
+                  "pm.test('Inactive customers are included, not filtered out', () => {",
+                  "    pm.expect(body.some((c) => c.customerId === 5)).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers?startDate={{windowStart}}&endDate={{today}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers"],
+              "query": [
+                { "key": "startDate", "value": "{{windowStart}}" },
+                { "key": "endDate", "value": "{{today}}" }
+              ]
+            },
+            "description": "The same calculation across every customer, served in two database queries regardless of how many customers exist."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewards — asynchronous endpoint",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Returns an identical payload to the synchronous endpoint', () => {",
+                  "    pm.expect(body.customerId).to.eql(1);",
+                  "    pm.expect(body.totalPoints).to.eql(884);",
+                  "});",
+                  "",
+                  "pm.test('The simulated downstream latency is observable (>700ms)', () => {",
+                  "    pm.expect(pm.response.responseTime).to.be.above(700);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1/async",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1", "async"]
+            },
+            "description": "Runs on a dedicated bounded executor behind a 750ms simulated delay, standing in for a slow downstream data source. The request thread is released while the work is in flight."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 · Validation & error handling",
+      "item": [
+        {
+          "name": "404 — unknown customer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Uses the standard error shape', () => {",
+                  "    pm.expect(body).to.have.property('timestamp');",
+                  "    pm.expect(body).to.have.property('status', 404);",
+                  "    pm.expect(body).to.have.property('error', 'Not Found');",
+                  "    pm.expect(body).to.have.property('message');",
+                  "    pm.expect(body).to.have.property('path');",
+                  "});",
+                  "",
+                  "pm.test('Message names the offending id', () => {",
+                  "    pm.expect(body.message).to.eql('No customer found with id 9999');",
+                  "});",
+                  "",
+                  "pm.test('No stack trace is leaked to the caller', () => {",
+                  "    pm.expect(pm.response.text()).to.not.include('at com.retailer');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/9999",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "9999"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "400 — start date after end date",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Explains what is wrong and names both dates', () => {",
+                  "    pm.expect(body.status).to.eql(400);",
+                  "    pm.expect(body.message).to.include('must not be after endDate');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1?startDate={{today}}&endDate={{windowStart}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1"],
+              "query": [
+                { "key": "startDate", "value": "{{today}}" },
+                { "key": "endDate", "value": "{{windowStart}}" }
+              ]
+            },
+            "description": "The range is inverted on purpose."
+          },
+          "response": []
+        },
+        {
+          "name": "400 — malformed date format",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('Tells the caller the expected format', () => {",
+                  "    pm.expect(body.message).to.include('yyyy-MM-dd');",
+                  "    pm.expect(body.message).to.include('startDate');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1?startDate=01-07-2026",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1"],
+              "query": [{ "key": "startDate", "value": "01-07-2026" }]
+            },
+            "description": "Day-first format instead of ISO. The error names the parameter and the expected pattern."
+          },
+          "response": []
+        },
+        {
+          "name": "400 — end date in the future",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('Rejects a period that has not happened yet', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('future');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1?endDate={{futureDate}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1"],
+              "query": [{ "key": "endDate", "value": "{{futureDate}}" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "400 — range wider than the maximum",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('Names the limit that was exceeded', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('exceeds the maximum');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/1?startDate={{tooWideStart}}&endDate={{today}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "1"],
+              "query": [
+                { "key": "startDate", "value": "{{tooWideStart}}" },
+                { "key": "endDate", "value": "{{today}}" }
+              ]
+            },
+            "description": "A five year range. The API caps requests at 24 months so a caller cannot trigger an unbounded query."
+          },
+          "response": []
+        },
+        {
+          "name": "400 — non-positive customer id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('Rejected at the edge by bean validation', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "0"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "400 — non-numeric customer id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('Type mismatch is handled, not surfaced as a 500', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/customers/abc",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rewards", "customers", "abc"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "400 — page size above the cap",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('Page size is capped so one request cannot pull the whole table', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/customers/1/transactions?size=500",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "customers", "1", "transactions"],
+              "query": [{ "key": "size", "value": "500" }]
+            },
+            "description": "The maximum page size is 100. An unbounded size parameter would be a denial-of-service vector."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
