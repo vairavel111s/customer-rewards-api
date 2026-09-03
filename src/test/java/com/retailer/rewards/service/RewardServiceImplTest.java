@@ -32,7 +32,10 @@ import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -56,23 +59,26 @@ class RewardServiceImplTest {
 
     private RewardServiceImpl rewardService;
 
+    private RewardCalculator rewardCalculator;
+
     private Customer alice;
 
     @BeforeEach
     void setUp() {
         RewardProperties properties = new RewardProperties();
-        // Remove the artificial delay so the async test does not pay for it.
-        properties.setAsyncSimulatedLatencyMs(0L);
 
         Clock fixedClock = Clock.fixed(TODAY.atStartOfDay(ZoneOffset.UTC).toInstant(),
                 ZoneId.of("UTC"));
 
+        // A spy rather than a plain instance: the rule still runs for real, but the number
+        // of invocations can be asserted on.
+        rewardCalculator = spy(new RewardCalculator(properties));
+
         rewardService = new RewardServiceImpl(
                 customerRepository,
                 transactionRepository,
-                new RewardCalculator(properties),
-                new DateRangeResolver(properties, fixedClock),
-                properties);
+                rewardCalculator,
+                new DateRangeResolver(properties, fixedClock));
 
         alice = customer(1L, "Alice Johnson", "alice.johnson@example.com");
     }
@@ -255,20 +261,25 @@ class RewardServiceImplTest {
     }
 
     @Test
-    @DisplayName("produces the same payload through the asynchronous path")
-    void asyncPathReturnsSameResult() throws Exception {
+    @DisplayName("scores each transaction exactly once, however many totals consume it")
+    void scoresEachTransactionExactlyOnce() {
+        List<Transaction> transactions = Arrays.asList(
+                transaction(10L, alice, "120.00", LocalDate.of(2026, 6, 10), "Electronics"),
+                transaction(11L, alice, "200.00", LocalDate.of(2026, 7, 5), "Home appliance"));
+
         when(customerRepository.findById(1L)).thenReturn(Optional.of(alice));
         when(transactionRepository
                 .findByCustomerIdAndTransactionDateBetweenOrderByTransactionDateAsc(
                         anyLong(), any(), any()))
-                .thenReturn(Collections.singletonList(
-                        transaction(50L, alice, "120.00", LocalDate.of(2026, 6, 10), "Electronics")));
+                .thenReturn(transactions);
 
-        CustomerRewardResponse response =
-                rewardService.calculateRewardsForCustomerAsync(1L, null, null).get();
+        rewardService.calculateRewardsForCustomer(1L, null, null);
 
-        assertThat(response.getTotalPoints()).isEqualTo(90);
-        assertThat(response.getCustomerId()).isEqualTo(1L);
+        // The per transaction detail, the monthly breakdown and the grand total all read
+        // the same scored figure, so the rule runs once per transaction and no more.
+        verify(rewardCalculator, times(1)).calculatePoints(new BigDecimal("120.00"));
+        verify(rewardCalculator, times(1)).calculatePoints(new BigDecimal("200.00"));
+        verifyNoMoreInteractions(rewardCalculator);
     }
 
     private Customer customer(Long id, String name, String email) {

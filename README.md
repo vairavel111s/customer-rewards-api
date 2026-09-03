@@ -83,8 +83,9 @@ com.retailer.rewards
 ├── config/                        RewardProperties, AsyncConfig, ClockConfig,
 │                                  OpenApiConfig, DataSeeder
 ├── controller/                    RewardController, CustomerController
-├── service/                       RewardService (+Impl), CustomerService,
-│                                  RewardCalculator, DateRangeResolver, DateRange
+├── service/                       RewardService (+Impl), AsyncRewardService,
+│                                  CustomerService, RewardCalculator,
+│                                  DateRangeResolver, DateRange
 ├── repository/                    CustomerRepository, TransactionRepository
 ├── entity/                        Customer, Transaction
 ├── dto/                           CustomerRewardResponse, MonthlyRewardSummary,
@@ -301,11 +302,12 @@ mvn test
 [INFO] Tests run:  5, Failures: 0, Errors: 0, Skipped: 0 -- CustomerControllerTest
 [INFO] Tests run:  9, Failures: 0, Errors: 0, Skipped: 0 -- RewardControllerTest
 [INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0 -- RewardsApiIntegrationTest
+[INFO] Tests run:  3, Failures: 0, Errors: 0, Skipped: 0 -- AsyncRewardServiceTest
 [INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0 -- DateRangeResolverTest
 [INFO] Tests run: 25, Failures: 0, Errors: 0, Skipped: 0 -- RewardCalculatorTest
 [INFO] Tests run:  9, Failures: 0, Errors: 0, Skipped: 0 -- RewardServiceImplTest
 [INFO]
-[INFO] Tests run: 71, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 74, Failures: 0, Errors: 0, Skipped: 0
 [INFO] BUILD SUCCESS
 ```
 
@@ -317,7 +319,8 @@ A JaCoCo coverage report is written to `target/site/jacoco/index.html`.
 |---|---|---|
 | `RewardCalculatorTest` | the rule in isolation | 19 parameterised amounts across both thresholds, null, refunds, overflow guard, reconfigured thresholds |
 | `DateRangeResolverTest` | defaulting and validation | default window, partial input, explicit range, single day, inverted range, future dates, oversized range |
-| `RewardServiceImplTest` | aggregation, repositories mocked | monthly grouping, totals, spending summary, empty months, no transactions, unknown customer, validation short-circuit, bulk report, async path |
+| `RewardServiceImplTest` | aggregation, repositories mocked | monthly grouping, totals, spending summary, empty months, no transactions, unknown customer, validation short-circuit, bulk report, and a spy asserting the rule runs exactly once per transaction |
+| `AsyncRewardServiceTest` | the async wrapper, delegate mocked | pass-through payload, period forwarding, failure propagation |
 | `RewardControllerTest` | HTTP layer, service mocked | JSON contract, parameter binding, 400/404 mapping, malformed dates, async dispatch |
 | `CustomerControllerTest` | HTTP layer | listing, paging defaults, paging limits, 404 |
 | `RewardsApiIntegrationTest` | full context + real H2 | end-to-end totals against the seeded data, window filtering, threshold edges, inactive customer, async endpoint, error paths |
@@ -348,6 +351,20 @@ pinned in tests and the expectations do not drift with the calendar.
 **Externalised thresholds.** The $50/$100 boundaries and the 1x/2x rates live in
 `application.yml` under `rewards.*`. A promotional change becomes a config edit, and the
 tests can exercise alternative rule sets.
+
+**The async wrapper is a separate bean.** Spring applies `@Transactional` through a proxy,
+and a proxy is only consulted for calls arriving from outside the object. Keeping the
+asynchronous method inside `RewardServiceImpl` and having it call its own
+`calculateRewardsForCustomer` would be a self-invocation: the proxy is skipped, and the
+async path would run without the read-only transaction the synchronous path gets.
+`AsyncRewardService` calls across a bean boundary, so both paths behave identically — and
+the simulated latency happens before the delegate is called, so it never holds a database
+connection open.
+
+**Each transaction is scored exactly once.** The per-transaction detail, the monthly
+breakdown and the grand total are all derived from one already-scored list rather than each
+re-running the calculator over the same rows. A Mockito spy in `RewardServiceImplTest`
+asserts the invocation count, so the duplication cannot creep back in.
 
 **Two queries for the bulk endpoint.** Reporting on every customer loads all customers once
 and all in-range transactions once, with the customer fetch-joined, then groups in memory.

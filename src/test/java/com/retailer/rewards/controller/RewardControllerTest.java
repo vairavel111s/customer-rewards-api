@@ -12,6 +12,7 @@ import com.retailer.rewards.dto.RewardSummary;
 import com.retailer.rewards.dto.TransactionDetail;
 import com.retailer.rewards.exception.CustomerNotFoundException;
 import com.retailer.rewards.exception.InvalidDateRangeException;
+import com.retailer.rewards.service.AsyncRewardService;
 import com.retailer.rewards.service.RewardService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,9 @@ class RewardControllerTest {
 
     @MockitoBean
     private RewardService rewardService;
+
+    @MockitoBean
+    private AsyncRewardService asyncRewardService;
 
     @Test
     @DisplayName("returns the reward payload for a known customer")
@@ -156,7 +160,7 @@ class RewardControllerTest {
     @Test
     @DisplayName("serves the async endpoint through a dispatched deferred result")
     void returnsRewardsAsynchronously() throws Exception {
-        when(rewardService.calculateRewardsForCustomerAsync(eq(1L), any(), any()))
+        when(asyncRewardService.calculateRewardsForCustomer(eq(1L), any(), any()))
                 .thenReturn(CompletableFuture.completedFuture(sampleResponse()));
 
         MvcResult asyncResult = mockMvc.perform(get(BASE_PATH + "/1/async"))

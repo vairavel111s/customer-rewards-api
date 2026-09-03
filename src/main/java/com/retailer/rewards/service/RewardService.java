@@ -2,7 +2,6 @@ package com.retailer.rewards.service;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 import com.retailer.rewards.dto.CustomerRewardResponse;
 import com.retailer.rewards.exception.CustomerNotFoundException;
@@ -10,6 +9,8 @@ import com.retailer.rewards.exception.InvalidDateRangeException;
 
 /**
  * Reward point calculations over a customer's recorded purchases.
+ *
+ * <p>The non blocking variant lives in {@link AsyncRewardService}, which delegates here.</p>
  */
 public interface RewardService {
 
@@ -32,12 +33,4 @@ public interface RewardService {
      */
     List<CustomerRewardResponse> calculateRewardsForAllCustomers(LocalDate requestedStart,
                                                                  LocalDate requestedEnd);
-
-    /**
-     * Non blocking variant of {@link #calculateRewardsForCustomer}. The work is handed to a
-     * dedicated executor and a short artificial delay is applied, which stands in for a
-     * slow downstream data source.
-     */
-    CompletableFuture<CustomerRewardResponse> calculateRewardsForCustomerAsync(
-            Long customerId, LocalDate requestedStart, LocalDate requestedEnd);
 }

@@ -6,6 +6,7 @@ import java.util.concurrent.CompletableFuture;
 
 import com.retailer.rewards.dto.CustomerRewardResponse;
 import com.retailer.rewards.dto.ErrorResponse;
+import com.retailer.rewards.service.AsyncRewardService;
 import com.retailer.rewards.service.RewardService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -42,9 +43,11 @@ public class RewardController {
     private static final Logger LOGGER = LoggerFactory.getLogger(RewardController.class);
 
     private final RewardService rewardService;
+    private final AsyncRewardService asyncRewardService;
 
-    public RewardController(RewardService rewardService) {
+    public RewardController(RewardService rewardService, AsyncRewardService asyncRewardService) {
         this.rewardService = rewardService;
+        this.asyncRewardService = asyncRewardService;
     }
 
     @GetMapping("/customers/{customerId}")
@@ -110,7 +113,7 @@ public class RewardController {
 
         LOGGER.info("GET (async) rewards for customer {} startDate={} endDate={}",
                 customerId, startDate, endDate);
-        return rewardService.calculateRewardsForCustomerAsync(customerId, startDate, endDate)
+        return asyncRewardService.calculateRewardsForCustomer(customerId, startDate, endDate)
                 .thenApply(ResponseEntity::ok);
     }
 }

@@ -9,11 +9,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
-import com.retailer.rewards.config.AsyncConfig;
-import com.retailer.rewards.config.RewardProperties;
 import com.retailer.rewards.dto.CustomerRewardResponse;
 import com.retailer.rewards.dto.MonthlyRewardSummary;
 import com.retailer.rewards.dto.RewardSummary;
@@ -25,7 +22,6 @@ import com.retailer.rewards.repository.CustomerRepository;
 import com.retailer.rewards.repository.TransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +32,10 @@ import org.springframework.transaction.annotation.Transactional;
  * score each one through {@link RewardCalculator}, then fold the scores into a monthly
  * breakdown and a set of totals. All the arithmetic happens on {@link BigDecimal} so cent
  * amounts stay exact.</p>
+ *
+ * <p>Every transaction is scored exactly once, in {@link #toTransactionDetails}. The
+ * monthly breakdown and the summary are both derived from those already scored details
+ * rather than re-running the calculator over the same transactions.</p>
  */
 @Service
 public class RewardServiceImpl implements RewardService {
@@ -48,18 +48,15 @@ public class RewardServiceImpl implements RewardService {
     private final TransactionRepository transactionRepository;
     private final RewardCalculator rewardCalculator;
     private final DateRangeResolver dateRangeResolver;
-    private final RewardProperties properties;
 
     public RewardServiceImpl(CustomerRepository customerRepository,
                              TransactionRepository transactionRepository,
                              RewardCalculator rewardCalculator,
-                             DateRangeResolver dateRangeResolver,
-                             RewardProperties properties) {
+                             DateRangeResolver dateRangeResolver) {
         this.customerRepository = customerRepository;
         this.transactionRepository = transactionRepository;
         this.rewardCalculator = rewardCalculator;
         this.dateRangeResolver = dateRangeResolver;
-        this.properties = properties;
     }
 
     @Override
@@ -110,43 +107,17 @@ public class RewardServiceImpl implements RewardService {
         return responses;
     }
 
-    @Override
-    @Async(AsyncConfig.REWARDS_EXECUTOR)
-    public CompletableFuture<CustomerRewardResponse> calculateRewardsForCustomerAsync(
-            Long customerId, LocalDate requestedStart, LocalDate requestedEnd) {
-        LOGGER.info("Async reward request for customer {} accepted on thread {}",
-                customerId, Thread.currentThread().getName());
-
-        simulateDownstreamLatency();
-
-        CustomerRewardResponse response =
-                calculateRewardsForCustomer(customerId, requestedStart, requestedEnd);
-        return CompletableFuture.completedFuture(response);
-    }
-
-    /**
-     * Stands in for a slow remote data source so the async path is observable end to end.
-     */
-    private void simulateDownstreamLatency() {
-        long latencyMs = properties.getAsyncSimulatedLatencyMs();
-        if (latencyMs <= 0L) {
-            return;
-        }
-        try {
-            Thread.sleep(latencyMs);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            LOGGER.warn("Simulated latency interrupted, continuing without the delay");
-        }
-    }
-
     /**
      * Assembles the response payload from a customer and their transactions in the period.
+     *
+     * <p>The scored details are computed first and then reused by every figure below, so
+     * the reward rule is applied once per transaction rather than once per transaction per
+     * aggregate.</p>
      */
     private CustomerRewardResponse buildResponse(Customer customer, List<Transaction> transactions,
                                                  DateRange period) {
         List<TransactionDetail> details = toTransactionDetails(transactions);
-        List<MonthlyRewardSummary> monthlyBreakdown = buildMonthlyBreakdown(transactions, period);
+        List<MonthlyRewardSummary> monthlyBreakdown = buildMonthlyBreakdown(details, period);
 
         int totalPoints = details.stream()
                 .mapToInt(TransactionDetail::getPointsEarned)
@@ -161,10 +132,14 @@ public class RewardServiceImpl implements RewardService {
                 period.getEndDate(),
                 totalPoints,
                 monthlyBreakdown,
-                buildSummary(transactions, details, monthlyBreakdown, period),
+                buildSummary(details, monthlyBreakdown, period),
                 details);
     }
 
+    /**
+     * The single place the reward rule is applied. Everything downstream reads the points
+     * from the returned details.
+     */
     private List<TransactionDetail> toTransactionDetails(List<Transaction> transactions) {
         return transactions.stream()
                 .map(transaction -> new TransactionDetail(
@@ -180,11 +155,11 @@ public class RewardServiceImpl implements RewardService {
      * Produces one entry per calendar month in the period, including months with no
      * activity, so the caller receives a gap free timeline.
      */
-    private List<MonthlyRewardSummary> buildMonthlyBreakdown(List<Transaction> transactions,
+    private List<MonthlyRewardSummary> buildMonthlyBreakdown(List<TransactionDetail> details,
                                                              DateRange period) {
-        Map<YearMonth, List<Transaction>> byMonth = transactions.stream()
+        Map<YearMonth, List<TransactionDetail>> byMonth = details.stream()
                 .collect(Collectors.groupingBy(
-                        transaction -> YearMonth.from(transaction.getTransactionDate()),
+                        detail -> YearMonth.from(detail.getTransactionDate()),
                         LinkedHashMap::new,
                         Collectors.toList()));
 
@@ -193,10 +168,11 @@ public class RewardServiceImpl implements RewardService {
 
         List<MonthlyRewardSummary> breakdown = new ArrayList<>(period.monthsCovered());
         for (YearMonth month = firstMonth; !month.isAfter(lastMonth); month = month.plusMonths(1)) {
-            List<Transaction> monthTransactions = byMonth.getOrDefault(month, Collections.emptyList());
+            List<TransactionDetail> monthDetails =
+                    byMonth.getOrDefault(month, Collections.emptyList());
 
-            int monthPoints = monthTransactions.stream()
-                    .mapToInt(transaction -> rewardCalculator.calculatePoints(transaction.getAmount()))
+            int monthPoints = monthDetails.stream()
+                    .mapToInt(TransactionDetail::getPointsEarned)
                     .sum();
 
             breakdown.add(new MonthlyRewardSummary(
@@ -204,27 +180,26 @@ public class RewardServiceImpl implements RewardService {
                     month.getMonth().name(),
                     month.getMonthValue(),
                     month.getYear(),
-                    monthTransactions.size(),
-                    scaleMoney(sumAmounts(monthTransactions)),
+                    monthDetails.size(),
+                    scaleMoney(sumAmounts(monthDetails)),
                     monthPoints));
         }
         return breakdown;
     }
 
-    private RewardSummary buildSummary(List<Transaction> transactions,
-                                       List<TransactionDetail> details,
+    private RewardSummary buildSummary(List<TransactionDetail> details,
                                        List<MonthlyRewardSummary> monthlyBreakdown,
                                        DateRange period) {
-        int transactionCount = transactions.size();
-        BigDecimal totalSpent = sumAmounts(transactions);
+        int transactionCount = details.size();
+        BigDecimal totalSpent = sumAmounts(details);
 
         BigDecimal averageAmount = (transactionCount == 0)
                 ? BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
                 : totalSpent.divide(BigDecimal.valueOf(transactionCount), MONEY_SCALE,
                         RoundingMode.HALF_UP);
 
-        BigDecimal highestAmount = transactions.stream()
-                .map(Transaction::getAmount)
+        BigDecimal highestAmount = details.stream()
+                .map(TransactionDetail::getAmount)
                 .max(BigDecimal::compareTo)
                 .orElse(BigDecimal.ZERO);
 
@@ -247,9 +222,9 @@ public class RewardServiceImpl implements RewardService {
                 lastDate);
     }
 
-    private BigDecimal sumAmounts(List<Transaction> transactions) {
-        return transactions.stream()
-                .map(Transaction::getAmount)
+    private BigDecimal sumAmounts(List<TransactionDetail> details) {
+        return details.stream()
+                .map(TransactionDetail::getAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
